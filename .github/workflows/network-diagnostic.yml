@@ -1,0 +1,78 @@
+
+name: Network Diagnostic
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check runner environment
+        run: |
+          echo "=== Runner ==="
+          hostname
+          uname -a
+          echo "=== DNS configuration ==="
+          cat /etc/resolv.conf
+          echo "=== Proxy settings ==="
+          env | grep -i proxy | sed -E 's#(https?://)[^/@ ]+@#\1***@#g' || true
+
+      - name: Test DNS resolution
+        run: |
+          DOMAIN=lyucdwgefyfbmaiopjbk.supabase.co
+
+          for HOST in \
+            github.com \
+            supabase.co \
+            "$DOMAIN"; do
+            echo "=== $HOST ==="
+            getent ahostsv4 "$HOST" || true
+          done
+
+          echo "=== Cloudflare DNS ==="
+          dig @1.1.1.1 "$DOMAIN" A +time=3 +tries=1 || true
+
+          echo "=== Google DNS ==="
+          dig @8.8.8.8 "$DOMAIN" A +time=3 +tries=1 || true
+
+          echo "=== System DNS ==="
+          dig "$DOMAIN" A +time=3 +tries=1 || true
+
+      - name: Test HTTPS
+        run: |
+          for URL in \
+            https://github.com \
+            https://supabase.co \
+            https://lyucdwgefyfbmaiopjbk.supabase.co/rest/v1/; do
+            echo "=== $URL ==="
+            curl -sS -o /dev/null \
+              --connect-timeout 5 \
+              --max-time 10 \
+              -w 'HTTP=%{http_code} RemoteIP=%{remote_ip}\n' \
+              "$URL" || true
+          done
+
+      - name: Test Python DNS
+        run: |
+          python - <<'PY'
+          import socket
+
+          hosts = [
+              "github.com",
+              "supabase.co",
+              "lyucdwgefyfbmaiopjbk.supabase.co",
+          ]
+
+          for host in hosts:
+              try:
+                  result = socket.getaddrinfo(
+                      host, 443, type=socket.SOCK_STREAM
+                  )
+                  ips = sorted({x[4][0] for x in result})
+                  print(f"{host}: {ips}")
+              except Exception as e:
+                  print(f"{host}: ERROR {e}")
+          PY
